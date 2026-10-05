@@ -1,0 +1,47 @@
+name: Construire l'AAB
+on: workflow_dispatch
+jobs:
+  aab:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: 20}
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: 21}
+      - name: Projet Android
+        env:
+          SERVER_URL: ${{ secrets.SERVER_URL }}
+        run: |
+          mkdir -p app/www app/assets
+          cp index.html app/www/index.html
+          cp capacitor.config.json app/
+          cp icon-*.png app/assets/
+          cd app
+          if [ -n "$SERVER_URL" ]; then sed -i "s#wss://TON-SERVEUR.onrender.com#$SERVER_URL#" www/index.html; fi
+          curl -L -o www/three.min.js https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js
+          npm init -y
+          npm i @capacitor/core @capacitor/cli @capacitor/android @capacitor/assets
+          npx cap add android
+          npx capacitor-assets generate --android
+          npx cap sync android
+      - name: Compiler
+        working-directory: app/android
+        run: ./gradlew bundleRelease
+      - name: Signer
+        working-directory: app
+        env:
+          KS: ${{ secrets.KEYSTORE_B64 }}
+          PW: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$KS" ]; then
+            keytool -genkeypair -keystore ks.jks -alias upload -keyalg RSA -keysize 2048 -validity 10000 -storepass "$PW" -keypass "$PW" -dname "CN=BlockVerse"
+            base64 -w0 ks.jks > keystore-base64.txt
+          else echo "$KS" | base64 -d > ks.jks; fi
+          jarsigner -keystore ks.jks -storepass "$PW" android/app/build/outputs/bundle/release/app-release.aab upload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: blockverse-aab
+          path: |
+            app/android/app/build/outputs/bundle/release/app-release.aab
+            app/keystore-base64.txt
